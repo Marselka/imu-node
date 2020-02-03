@@ -1,0 +1,31 @@
+<launch>
+  <arg name="to_record" default="1" />
+  <arg name="file_name" default="imu_data" />
+  <group if="$(arg to_record)">
+    <!-- with record-->
+    <include file="$(find realsense2_camera)/launch/rs_camera.launch" >
+      <arg name="enable_pointcloud"   value="true"/>
+      <arg name="enable_depth"        value="true"/>
+      <arg name="enable_color"        value="true"/>
+<!--      <arg name="enable_sync"           default="true"/>-->
+<!--      <arg name="align_depth"           default="true"/>-->
+    </include>
+    <node pkg="imu"
+          name="imu"
+          type="imu" />
+    <node pkg="rosbag"
+          name="record"
+          type="record"
+          args="-O $(find imu)/bags/$(arg file_name).bag /imu /rscamera/depth/image_rect_raw /rscamera/color/image_raw/rscamera/depth/color/points"
+          required="true" />
+  </group>
+  <group unless="$(arg to_record)">
+    <!-- no record-->
+    <include file="$(find realsense2_camera)/launch/view_d435_model.launch" />
+    <node pkg="imu"
+          name="imu"
+          type="imu" />
+  </group>
+</launch>
+
+

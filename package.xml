@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>ros_imu</name>
+  <version>0.0.0</version>
+  <description>My template package</description>
+
+  <maintainer email="g.ferrer@skoltech.ru">Gonzalo Ferrer</maintainer>
+  <maintainer email="r.zinovyev@skoltech.ru">Zinovyev Roman</maintainer>
+
+  <!-- One license tag required, multiple allowed, one license per tag -->
+  <license>COPYRIGHT_SKOLTECH</license>
+
+  <!-- Url tags are optional, but mutiple are allowed, one per tag -->
+  <url type="website"></url>
+
+  <!-- Author tags are optional, mutiple are allowed, one per tag -->
+  <author email="g.ferrer@skoltech.ru">Gonzalo Ferrer</author>
+  <author email="r.zinovyev@skoltech.ru">Zinovyev Roman</author>
+
+  <!-- Build tool and dependencies-->
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <depend>rospy</depend>
+  <depend>numpy</depend>
+  <depend>pyserial</depend>
+
+  <depend>roscpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>serial</depend>
+
+</package>

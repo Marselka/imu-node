@@ -1,0 +1,22 @@
+<launch>
+  <arg name="to_record" default="1" />
+  <arg name="file_name" default="imu_data" />
+
+  <group if="$(arg to_record)">
+    <!-- with record-->
+    <node pkg="imu"
+          name="imu"
+          type="imu" />
+    <node pkg="rosbag"
+          name="record"
+          type="record"
+          args="-O $(find imu)/bags/$(arg file_name).bag /imu"
+          required="true" />
+  </group>
+  <group unless="$(arg to_record)">
+    <!-- no record-->
+    <node pkg="imu"
+          name="imu"
+          type="imu" />
+  </group>
+</launch>
