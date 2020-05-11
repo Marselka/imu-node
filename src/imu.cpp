@@ -1,214 +1,224 @@
-// This program publishes imu data from usb port
 #include <ros/ros.h>
-#include <sensor_msgs/Imu.h>        // sensor_msgs::Imu
-#include <string>                   // std::string std::stod
-#include <iostream>                 // std::stringstream std::cout
-#include <serial/serial.h>          // serial::Serial serial::Timeout::simpleTimeout
-#include <vector>                   // std::vector
-#include <sstream>                  // std::stringstream
-#include <exception>                // std::exception
-#include <sstream>
+#include <sensor_msgs/Imu.h>
+#include <sensor_msgs/Temperature.h>
+#include <sensor_msgs/TimeReference.h>
+#include <string>                   
+#include <iostream>                 
+#include <serial/serial.h>          
+#include <vector>                   
+#include <sstream>                  
+#include <exception>                
 #include <boost/numeric/ublas/vector.hpp>
 #include <boost/numeric/ublas/io.hpp>
 #include <boost/math/constants/constants.hpp>
 //#include <chiki-briki_i_v_damki.h>
-// constants
-std::string TOPIC = "imu";
 
+std::string IMU_TOPIC = "imu";
+std::string IMU_TEMP_TOPIC_POSTFIX = "_temp";
+std::string CAMERAS_TS_TOPIC = "cameras_ts";
+std::string LIDAR_TS_TOPIC = "lidar_ts";
+
+std::string IMU_TEMP_TOPIC = IMU_TOPIC + IMU_TEMP_TOPIC_POSTFIX;
 std::string PORT;// = "/dev/ttyUSB200";  // port name
-const int BAUD = 2000000;            // for incoming data
-int LINE_LENGHT = 156;               // lengh of string line coming from imu
-int RATE = 10000;                   // frequency to publish at
-int TIMOUT = 10;                    // delay in ms
-int VALUES_NUMBER = 20;
-uint16_t FRACT_NUMBER = 32767; 
-double g = 9.81;
-const double pi = boost::math::constants::pi<double>();
-int TEMP_BUF_SIZE = 800;
-int N_OF_IMUS = 4;
-int N_OF_IMU_FIELDS = 7;
-int POS_OF_FIRST_ACC_FIELD = 4;
-int POS_OF_FIRST_GYRO_FIELD = 8;
+const int BAUD = 2000000;            
+int RATE = 10000;                   
+int TIMOUT = 10;                    
+uint16_t FRACT_NUMBER = 32768; 
+double G = 9.81;
+const double PI = boost::math::constants::pi<double>();
+int TEMP_BUF_SIZE = 200;
+int NUM_OF_IMUS = 4;
+int NUM_OF_TS_FIELDS = 3;
+int NUM_OF_IMU_FIELDS = 7;
+int PLD_STRT_INDX = 2; // payload starting index in received string line
 
-/* Received line coFIELDS the following data separted by spaces:
-- m s FIELDS								RTC time
-- cnt 												count
-- acc1x acc1y acc1z temp1 gyro1x gyro1y gyro1z 		IMU0 data
-- acc2x acc2y acc2z temp2 gyro2x gyro2y gyro2z 		IMU1 data
-- ...												IMUx data
-- \n 												end of line
-*/
+class FieldsCount{
+  public:
+    int count;   
+    FieldsCount (int start = 0) {
+    	count = start;
+    }
+    void add (int additive) {
+    	count += additive;
+    }
+    int current (void) {
+    	return count;
+    }
+};
 
-std::vector<int16_t> string_to_ints(std::string str) { 
+std::vector<int16_t> string_to_ints(std::string str, int start_from = 0) { 
 	std::stringstream ss;	 
 	/* Storing the whole string into string stream */
-	ss << str; 
+	ss << str.substr(start_from); 
 	/* Running loop till the end of the stream */
 	std::string temp; 
 	int found; 
 	
-	std::vector<int16_t> imu_ints;        
+	std::vector<int16_t> ints;        
 
 	while (!ss.eof()) { 
 		/* extracting word by word from stream */
 		ss >> temp; 
 		/* Checking the given word is integer or not */
 		if (std::stringstream(temp) >> std::hex >> found) {
-			//std::cout << static_cast<int16_t>(found) << " "; 
-			imu_ints.push_back(static_cast<int16_t>(found));
+			ints.push_back(static_cast<int16_t>(found));
 		}
-		/* To save from space at the end of string */
 		temp = ""; 
 	} 
-	//std::cout << std::endl;
-return imu_ints;
+	return ints;
 } 
 
-ros::Time imu_ints_to_board_ts(std::vector<int16_t> imu_ints) {
-	ros::Time board_ts;
-	double secs;
+std::vector<int16_t> subvector(std::vector<int16_t> const &initial_v, int starting_index) {
+   std::vector<int16_t> sub_v(initial_v.begin() + starting_index, initial_v.end());
+   return sub_v;
+}
 
-	secs = imu_ints[0] * 60.0 + imu_ints[1] * 1.0 + (FRACT_NUMBER - imu_ints[2])/(FRACT_NUMBER + 1.0);
-	board_ts = ros::Time(secs);
+ros::Time ints_to_board_ts(std::vector<int16_t> input_ints, FieldsCount * fc_pointer, int first_element=0) {
+	std::vector<int16_t> ints = subvector(input_ints, fc_pointer->current());
+	
+	double secs = static_cast<uint16_t>(ints[0]) * 60.0 + static_cast<uint16_t>(ints[1]) * 1.0 + (FRACT_NUMBER - static_cast<uint16_t>(ints[2]))/(FRACT_NUMBER + 1.0);
+	ros::Time board_ts = ros::Time(secs);
 
+	fc_pointer->add(NUM_OF_TS_FIELDS);
 	return board_ts;
 }
 
-boost::numeric::ublas::vector<double> imu_ints_to_acc(std::vector<int16_t> imu_ints, uint8_t imu_n) {
-	boost::numeric::ublas::vector<double> acc(3);
-	boost::numeric::ublas::vector<int16_t> acc_ints(3);
+boost::numeric::ublas::vector<double> ints_to_imu_meas(std::vector<int16_t> input_ints, FieldsCount * fc_pointer, int first_element=0) {
+	std::vector<int16_t> ints = subvector(input_ints, fc_pointer->current());
+	boost::numeric::ublas::vector<double> imu_meas(NUM_OF_IMU_FIELDS);
+	for (int i = 0; i < imu_meas.size(); i++) {
+		// acc
+		if (i < 3) {
+			imu_meas(i) = ints[i] / 16384.0 * G;
+		}
+		// temperature
+		else if (i == 3) {
+			imu_meas(i) = ints[3] / 340.0 + 35.0;
+		}
+		// gyro
+		else if (i >= 3) {
+			imu_meas(i) =  ints[i] / 131.0 / 180.0 * PI;
+		}
+	}
 
-	acc_ints[0] = imu_ints[N_OF_IMU_FIELDS * imu_n + POS_OF_FIRST_ACC_FIELD];
-	acc_ints[1] = imu_ints[N_OF_IMU_FIELDS * imu_n + POS_OF_FIRST_ACC_FIELD+1];
-	acc_ints[2] = imu_ints[N_OF_IMU_FIELDS * imu_n + POS_OF_FIRST_ACC_FIELD+2];
-
-	acc = acc_ints/16384.0*g;
-	return acc;
+	fc_pointer->add(NUM_OF_IMU_FIELDS);
+	return imu_meas;
 }
 
-boost::numeric::ublas::vector<double> imu_ints_to_gyro(std::vector<int16_t> imu_ints, uint8_t imu_n) {
-	boost::numeric::ublas::vector<double> gyro(3);
-	boost::numeric::ublas::vector<int16_t> gyro_ints(3);
-	gyro_ints[0] = imu_ints[N_OF_IMU_FIELDS * imu_n + POS_OF_FIRST_GYRO_FIELD];
-	gyro_ints[1] = imu_ints[N_OF_IMU_FIELDS * imu_n + POS_OF_FIRST_GYRO_FIELD+1];
-	gyro_ints[2] = imu_ints[N_OF_IMU_FIELDS * imu_n + POS_OF_FIRST_GYRO_FIELD+2];
-
-	gyro = gyro_ints / 131.0 / 180.0 * pi;
-	return gyro;
-}
-
-std::vector<std::string> split(std::string string_line, char delimeter) {
-    // splits line into a vector of str values
-    std::stringstream ss(string_line);
-    std::string item;
-    std::vector<std::string> splitted;
-    while (std::getline(ss, item, delimeter))
-        splitted.push_back(item);
-    return splitted;
-}
-
-std::vector<double> strings_to_doubles_vector(std::vector<std::string> strings_vector) {
-    // converts  vector of strings to vector of doubles
-    std::vector<double> doubles_vector;
-    double imu_val;
-    std::string::size_type sz; // size_type
-
-    for (int i = 0; i < strings_vector.size(); i++) {
-        try {
-            imu_val = std::stod(strings_vector[i], &sz); }
-        catch(std::exception& ia) {
-            imu_val = 0.0;} // todo what value should be used if "-" or "@" or " " is recieved from imu ?
-        doubles_vector.push_back(imu_val);
-    }
-    return doubles_vector;
-}
-
-void publish_imu(ros::Publisher imu_pub, uint8_t imu_n, ros::Time ts, boost::numeric::ublas::vector<double> acc, boost::numeric::ublas::vector<double> gyro) {
+void publish_imu(ros::Publisher pub, uint8_t imu_n, ros::Time ts, boost::numeric::ublas::vector<double> imu_meas) {
     // publish_imu data [a in m/s^2] and [w in rad/s]
-	std::string topic = TOPIC + std::to_string(imu_n);
-    sensor_msgs::Imu imu_msg;
+	std::string frame_id = IMU_TOPIC + std::to_string(imu_n);
+    sensor_msgs::Imu msg;
 
-    imu_msg.header.frame_id = topic;
-    imu_msg.header.stamp = ts;
+    msg.header.frame_id = frame_id;
+    msg.header.stamp = ts;
     // linear_acceleration
-    imu_msg.linear_acceleration.x = acc[0];
-    imu_msg.linear_acceleration.y = acc[1];
-    imu_msg.linear_acceleration.z = acc[2];
+    msg.linear_acceleration.x = imu_meas[0];
+    msg.linear_acceleration.y = imu_meas[1];
+    msg.linear_acceleration.z = imu_meas[2];
     // angular_velocity
-    imu_msg.angular_velocity.x = gyro[0];
-    imu_msg.angular_velocity.y = gyro[1];
-    imu_msg.angular_velocity.z = gyro[2];
+    msg.angular_velocity.x = imu_meas[4];
+    msg.angular_velocity.y = imu_meas[5];
+    msg.angular_velocity.z = imu_meas[6];
     // Publish the message.
-    imu_pub.publish(imu_msg);
+    pub.publish(msg);
+}
+
+void publish_imu_temperature(ros::Publisher pub, uint8_t imu_n, ros::Time ts, boost::numeric::ublas::vector<double> imu_meas) {
+    std::string frame_id = IMU_TOPIC + std::to_string(imu_n) + IMU_TEMP_TOPIC_POSTFIX;
+    sensor_msgs::Temperature msg;
+
+    msg.header.frame_id = frame_id;
+    msg.header.stamp = ts;
+    msg.temperature = imu_meas[3];
+    
+    pub.publish(msg);
+}
+
+void publish_cameras_ts(ros::Publisher pub, ros::Time ts) {
+    std::string frame_id = CAMERAS_TS_TOPIC;
+    sensor_msgs::TimeReference msg;
+
+    msg.header.frame_id = frame_id;
+    msg.header.stamp = ts;
+    //msg.time_ref
+    pub.publish(msg);
+}
+
+void publish_lidar_ts(ros::Publisher pub, ros::Time ts) {
+    std::string frame_id = LIDAR_TS_TOPIC;
+    sensor_msgs::TimeReference msg;
+
+    msg.header.frame_id = frame_id;
+    msg.header.stamp = ts;
+    //msg.time_ref
+    pub.publish(msg);
+}
+
+void pub_distributer(std::string str) {
 }
 
 int main(int argc, char **argv) {
+	// Register signal and signal handler
 	if (argc < 2) {
 	    std::cout << "Please, specify serial device.For example, \"/dev/ttyUSB0\"" << std::endl;
 	    return 0;
 	}
-	PORT = argv[1];
+    
+    PORT = argv[1];
     bool board_starting_ts_is_read = false;
     std::string str;
-    std::string num;
-    std::stringstream ss;
-
-    std::vector<int16_t> imu_ints;
+    
     ros::Time sys_starting_ts, board_starting_ts, ts, ts_old;
     ros::Duration delta_ts;
-    boost::numeric::ublas::vector<double> acc;
-    boost::numeric::ublas::vector<double> gyro;
     // Initialize the ROS system and become a node.
-    ros::init(argc, argv, "publish_velocity");
-    ros::NodeHandle nh;
+    ros::init(argc, argv, "it_is_here");
+    
 
     // Create a publisher object.
-    //ros::Publisher imu_pub[N_OF_IMUS];
-    //for (int i=0; i<N_OF_IMUS; i++) {
-	//    imu_pub[i] = nh.advertise<sensor_msgs::Imu>(TOPIC + std::to_string(i), 10000);
-    //}
-    ros::Publisher imu_pub;
-    imu_pub = nh.advertise<sensor_msgs::Imu>(TOPIC, 10000);
-
+	ros::NodeHandle nh;
+	ros::Publisher imu_pub = nh.advertise<sensor_msgs::Imu>(IMU_TOPIC, RATE);
+	ros::Publisher imu_temp_pub = nh.advertise<sensor_msgs::Temperature>(IMU_TEMP_TOPIC, RATE);
+	//ros::Publisher cameras_ts_pub = nh.advertise<sensor_msgs::TimeReference>(CAMERAS_TS_TOPIC, RATE);
+	//ros::Publisher lidar_ts_pub = nh.advertise<sensor_msgs::TimeReference>(LIDAR_TS_TOPIC, RATE);
+	
     // open port, baudrate, timeout in milliseconds
-    serial::Serial my_serial(PORT, BAUD, serial::Timeout::simpleTimeout(TIMOUT));
+    serial::Serial serial(PORT, BAUD, serial::Timeout::simpleTimeout(TIMOUT));
 
     // check if serial port open
-    std::cout << "Is the serial port open?";
-    if(my_serial.isOpen())
-        std::cout << " Yes." << "\n";
+    std::cout << "Serial port is...";
+    if(serial.isOpen())
+        std::cout << " open." << std::endl;
     else
-        std::cout << " No." << "\n";
+        std::cout << " not open!" << std::endl;
 
-    sys_starting_ts = ros::Time::now();
-    // Searching for start of the first complete line
-    while(!board_starting_ts_is_read) {
-        str = my_serial.readline(); 
-        //std::cout << str.size() << std::endl;
-		if (str.size() == LINE_LENGHT){
-            imu_ints = string_to_ints(str);
-            delta_ts = sys_starting_ts - imu_ints_to_board_ts(imu_ints);
-            board_starting_ts_is_read = true;
-        }
-	}
-    while(ros::ok()) {
-        ss << my_serial.readline(); 
-    	//std::cout << st.size() << std::endl;
-		while(ss.tellp() - ss.tellg() > TEMP_BUF_SIZE) {
-			std::getline(ss, str);
-			//std::cout << str.size() << " " << LINE_LENGHT << std::endl;
-			if (str.size() + 1 == LINE_LENGHT) {
-	            imu_ints = string_to_ints(str);
-                ts = imu_ints_to_board_ts(imu_ints) + delta_ts;
-                //std::cout << 1.0/((ts-ts_old).toSec()) << std::endl;
-				//ts_old = ts;			    
-                for (int i=0; i<N_OF_IMUS; i++) {
-		            acc = imu_ints_to_acc(imu_ints, i);
-		            gyro = imu_ints_to_gyro(imu_ints, i);
-					//publish_imu(imu_pub[i], i, ts, acc, gyro);
-					publish_imu(imu_pub, i, ts, acc, gyro);
-                }
-	        }
-	    }
+    // Clean from possibly broken string
+    while(serial.available() < TEMP_BUF_SIZE) {
+    	str = serial.readline(); 
+    	if(str.at(str.size()-1)=='\n') {
+    		break;
+    	}
     }
+
+    // Main loop
+    //while(1);
+    while(ros::ok()) {
+        if(serial.available() > TEMP_BUF_SIZE) {
+        	str = serial.readline();
+        	//std::cout << str << std::endl;
+            std::vector<int16_t> ints = string_to_ints(str, 0);
+            FieldsCount fields_count;
+            ros::Time ts = ints_to_board_ts(ints, &fields_count);
+            fields_count.add(1);
+            //std::cout << fields_count.current() << std::endl;
+            
+            //std::cout << ts << std::endl;
+    		for(int i = 0; i < NUM_OF_IMUS; i++) {
+	   			boost::numeric::ublas::vector<double> imu_meas;
+				imu_meas = ints_to_imu_meas(ints, &fields_count);
+				publish_imu(imu_pub, i, ts, imu_meas);
+				publish_imu_temperature(imu_temp_pub, i, ts, imu_meas);
+			}
+	    }
+	}
 }
