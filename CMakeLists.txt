@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 2.8.3)
-project(ros_imu) #TODO same name as in package.xml
+project(imu) #TODO same name as in package.xml
 set (CMAKE_CXX_STANDARD 11)
 
 # ******************************************************************** 
