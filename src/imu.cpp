@@ -113,7 +113,7 @@ boost::numeric::ublas::vector<double> ints_to_imu_meas(std::vector<int16_t> inpu
 ros::Time ints_to_delta_t(std::vector<int16_t> input_ints, FieldsCount * fc_pointer, int first_element=0) {
 	std::vector<int16_t> ints = subvector(input_ints, fc_pointer->current());
 	
-	double secs = static_cast<uint16_t>(ints[0]) * 0.000000625;
+	double secs = static_cast<uint32_t>(ints[0]) * 0.0000000390625;
 	ros::Time delta_t = ros::Time(secs);
 
 	fc_pointer->add(1);
