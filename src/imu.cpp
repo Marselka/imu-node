@@ -2,6 +2,7 @@
 #include <sensor_msgs/Imu.h>
 #include <sensor_msgs/Temperature.h>
 #include <sensor_msgs/TimeReference.h>
+//#include <std_msgs/Duration.h>
 #include <string>                   
 #include <iostream>                 
 #include <serial/serial.h>          
@@ -17,6 +18,8 @@ std::string IMU_TOPIC_PREFIX = "imu";
 std::string IMU_TEMP_TOPIC_POSTFIX = "_temp";
 std::string CAMERAS_TS_TOPIC = "cameras_ts";
 std::string LIDAR_TS_TOPIC = "lidar_ts";
+std::string DELTA_T_TOPIC = "delta_t";
+
 
 std::string IMU_TEMP_TOPIC = IMU_TOPIC_PREFIX + IMU_TEMP_TOPIC_POSTFIX;
 std::string PORT;// = "/dev/ttyUSB200";  // port name
@@ -107,6 +110,16 @@ boost::numeric::ublas::vector<double> ints_to_imu_meas(std::vector<int16_t> inpu
 	return imu_meas;
 }
 
+ros::Time ints_to_delta_t(std::vector<int16_t> input_ints, FieldsCount * fc_pointer, int first_element=0) {
+	std::vector<int16_t> ints = subvector(input_ints, fc_pointer->current());
+	
+	double secs = static_cast<uint16_t>(ints[0]) * 0.000000625;
+	ros::Time delta_t = ros::Time(secs);
+
+	fc_pointer->add(1);
+	return delta_t;
+}
+
 void publish_imu(ros::Publisher pub, uint8_t imu_n, ros::Time ts, boost::numeric::ublas::vector<double> imu_meas) {
     // publish_imu data [a in m/s^2] and [w in rad/s]
 	std::string frame_id = IMU_TOPIC_PREFIX + std::to_string(imu_n);
@@ -157,7 +170,14 @@ void publish_lidar_ts(ros::Publisher pub, ros::Time ts) {
     pub.publish(msg);
 }
 
-void pub_distributer(std::string str) {
+void publish_delta_t(ros::Publisher pub, ros::Time ts, ros::Time delta_t) {
+    std::string frame_id = DELTA_T_TOPIC;
+    sensor_msgs::TimeReference msg;
+
+    msg.header.frame_id = frame_id;
+    msg.header.stamp = ts;
+    msg.time_ref = delta_t;
+    pub.publish(msg);
 }
 
 int main(int argc, char **argv) {
@@ -195,6 +215,7 @@ int main(int argc, char **argv) {
 	ros::Publisher imu_temp_pub = nh.advertise<sensor_msgs::Temperature>(IMU_TEMP_TOPIC, RATE);
 	//ros::Publisher cameras_ts_pub = nh.advertise<sensor_msgs::TimeReference>(CAMERAS_TS_TOPIC, RATE);
 	//ros::Publisher lidar_ts_pub = nh.advertise<sensor_msgs::TimeReference>(LIDAR_TS_TOPIC, RATE);
+	ros::Publisher delta_t_pub = nh.advertise<sensor_msgs::TimeReference>(DELTA_T_TOPIC, RATE);
 	
     // open port, baudrate, timeout in milliseconds
     serial::Serial serial(PORT, BAUD, serial::Timeout::simpleTimeout(TIMOUT));
@@ -233,9 +254,11 @@ int main(int argc, char **argv) {
         if(serial.available() > TEMP_BUF_SIZE) {
         	str = serial.readline();
             n_of_strings++;
-        	//std::cout << str << std::endl;
             std::vector<int16_t> ints = string_to_ints(str, 0);
-            
+            //std::cout << str << std::endl;
+            //for (std::vector<int16_t>::const_iterator i = ints.begin()+4; i != ints.end()-8; ++i)
+            //    std::cout << *i << ' ';
+            //std::cout << std::endl;
             FieldsCount fields_count_trash(0);
             board_ts = ints_to_board_ts(ints, &fields_count_trash);
             if (read_laptop_time == true) {
@@ -260,6 +283,8 @@ int main(int argc, char **argv) {
 				publish_imu(imu_pubs[imu_n], imu_n, ts, imu_meas);
 				publish_imu_temperature(imu_temp_pub, imu_n, ts, imu_meas);
 			}
+			ros::Time delta_t = ints_to_delta_t(ints, &fields_count);
+			publish_delta_t(delta_t_pub, ts, delta_t);
             if (n_of_strings%1000==0) {
                 std::cout << n_of_strings << ": " << str << std::endl;
             }
